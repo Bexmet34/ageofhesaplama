@@ -3,33 +3,37 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { 
-  Calculator, 
-  Sword, 
-  Shield, 
-  Target, 
-  Hammer, 
-  Clock, 
+import {
+  Calculator,
+  Sword,
+  Shield,
+  Target,
+  Hammer,
+  Clock,
   Info,
   TrendingUp,
   RefreshCw,
-  Globe
+  Download,
+  X,
+  Building2
 } from 'lucide-react';
 import { UNIT_DATA } from './data/unitData';
+import { BUILDINGS } from './data/buildingData';
 import { UnitType, CalculatorState, ResourceCost } from './types';
 import { translations } from './translations';
 
 const TIER_COLORS: Record<number, string> = {
   1: 'bg-slate-500',
   2: 'bg-emerald-500',
-  3: 'bg-blue-500',
-  4: 'bg-purple-500',
+  3: 'bg-sky-500',
+  4: 'bg-violet-500',
   5: 'bg-orange-500',
   6: 'bg-red-500',
-  7: 'bg-amber-600',
-  8: 'bg-rose-700',
+  7: 'bg-amber-500',
+  8: 'bg-rose-600',
+  9: 'bg-fuchsia-600',
 };
 
 const UNIT_ICONS: Record<UnitType, React.ReactNode> = {
@@ -37,6 +41,13 @@ const UNIT_ICONS: Record<UnitType, React.ReactNode> = {
   cavalry: <Sword className="w-5 h-5" />,
   archer: <Target className="w-5 h-5" />,
   siege: <Hammer className="w-5 h-5" />,
+};
+
+const RES_COLORS: Record<string, string> = {
+  food: 'text-orange-400',
+  wood: 'text-emerald-400',
+  stone: 'text-slate-300',
+  gold: 'text-yellow-400',
 };
 
 export default function App() {
@@ -52,160 +63,326 @@ export default function App() {
     trainingBuff: 0,
   });
 
-  const [activeTab, setActiveTab] = useState<'training' | 'research' | 'data'>('training');
+  const [activeTab, setActiveTab] = useState<'training' | 'research' | 'buildings' | 'data'>('training');
 
+  // Building state
+  const [selectedBuilding, setSelectedBuilding] = useState(BUILDINGS[0].id);
+  const [buildingFromLevel, setBuildingFromLevel] = useState(1);
+  const [buildingToLevel, setBuildingToLevel] = useState(10);
+  const [buildingBuff, setBuildingBuff] = useState(0);
+
+  // PWA Install
+  const [installPrompt, setInstallPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: any) => {
+      e.preventDefault();
+      setInstallPrompt(e);
+      setShowInstallBanner(true);
+    };
+    window.addEventListener('beforeinstallprompt', handler);
+
+    // Also show for iOS (no beforeinstallprompt)
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !(window as any).MSStream;
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches;
+    if (isIOS && !isStandalone) {
+      setShowInstallBanner(true);
+    }
+
+    return () => window.removeEventListener('beforeinstallprompt', handler);
+  }, []);
+
+  const handleInstall = async () => {
+    if (installPrompt) {
+      installPrompt.prompt();
+      await installPrompt.userChoice;
+      setInstallPrompt(null);
+    }
+    setShowInstallBanner(false);
+  };
+
+  // Unit calculations
   const unitData = useMemo(() => UNIT_DATA[state.unitType], [state.unitType]);
-  
-  const targetUnit = useMemo(() => 
-    unitData.find(u => u.tier === state.targetTier), 
-  [unitData, state.targetTier]);
+
+  const targetUnit = useMemo(() =>
+    unitData.find(u => u.tier === state.targetTier),
+    [unitData, state.targetTier]);
+
+  const currentUnit = useMemo(() =>
+    unitData.find(u => u.tier === state.currentTier),
+    [unitData, state.currentTier]);
 
   const calculations = useMemo(() => {
     if (!targetUnit) return null;
 
     const buffMultiplier = 1 / (1 + state.trainingBuff / 100);
-    const totalTimeSeconds = targetUnit.trainingTimeSeconds * state.amount * buffMultiplier;
-    
+    const isUpgrade = state.currentTier < state.targetTier && currentUnit;
+
+    let baseTime = targetUnit.trainingTimeSeconds;
+    let baseCost = { ...targetUnit.trainingCost };
+
+    if (isUpgrade && currentUnit) {
+      baseTime = Math.max(0, targetUnit.trainingTimeSeconds - currentUnit.trainingTimeSeconds);
+      baseCost = {
+        food: Math.max(0, targetUnit.trainingCost.food - currentUnit.trainingCost.food),
+        wood: Math.max(0, targetUnit.trainingCost.wood - currentUnit.trainingCost.wood),
+        stone: Math.max(0, targetUnit.trainingCost.stone - currentUnit.trainingCost.stone),
+        gold: Math.max(0, targetUnit.trainingCost.gold - currentUnit.trainingCost.gold),
+      };
+    }
+
+    const totalTimeSeconds = baseTime * state.amount * buffMultiplier;
     const totalCost: ResourceCost = {
-      food: targetUnit.trainingCost.food * state.amount,
-      wood: targetUnit.trainingCost.wood * state.amount,
-      stone: targetUnit.trainingCost.stone * state.amount,
-      gold: targetUnit.trainingCost.gold * state.amount,
+      food: baseCost.food * state.amount,
+      wood: baseCost.wood * state.amount,
+      stone: baseCost.stone * state.amount,
+      gold: baseCost.gold * state.amount,
     };
+
+    const researchBuffMultiplier = 1 / (1 + state.researchBuff / 100);
+    const researchTimeSeconds = (targetUnit.researchTimeSeconds || 0) * researchBuffMultiplier;
+    const researchCost: ResourceCost = targetUnit.researchCost || { food: 0, wood: 0, stone: 0, gold: 0 };
 
     return {
       totalTimeSeconds,
       totalCost,
       formattedTime: formatTime(totalTimeSeconds),
+      isUpgrade,
+      researchTimeSeconds,
+      formattedResearchTime: formatTime(researchTimeSeconds),
+      researchCost,
     };
-  }, [targetUnit, state.amount, state.trainingBuff]);
+  }, [targetUnit, currentUnit, state.amount, state.trainingBuff, state.researchBuff, state.currentTier, state.targetTier]);
+
+  // Building calculations
+  const buildingCalc = useMemo(() => {
+    const building = BUILDINGS.find(b => b.id === selectedBuilding);
+    if (!building) return null;
+
+    const levelsInRange = building.levels.filter(l => l.level > buildingFromLevel && l.level <= buildingToLevel);
+    const buffMult = 1 / (1 + buildingBuff / 100);
+
+    const totalCost: ResourceCost = { food: 0, wood: 0, stone: 0, gold: 0 };
+    let totalTime = 0;
+    let totalPower = 0;
+
+    levelsInRange.forEach(l => {
+      totalCost.food += l.upgradeCost.food;
+      totalCost.wood += l.upgradeCost.wood;
+      totalCost.stone += l.upgradeCost.stone;
+      totalCost.gold += l.upgradeCost.gold;
+      totalTime += l.upgradeTimeSeconds;
+      totalPower += l.power;
+    });
+
+    totalTime *= buffMult;
+
+    return { totalCost, totalTime, totalPower, levels: levelsInRange, building, formattedTime: formatTime(totalTime) };
+  }, [selectedBuilding, buildingFromLevel, buildingToLevel, buildingBuff]);
 
   function formatTime(seconds: number) {
     const days = Math.floor(seconds / (24 * 3600));
     const hours = Math.floor((seconds % (24 * 3600)) / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
-    
+
     const parts = [];
-    if (days > 0) parts.push(`${days}d`);
-    if (hours > 0) parts.push(`${hours}h`);
-    if (minutes > 0) parts.push(`${minutes}m`);
-    
+    if (days > 0) parts.push(`${days}${lang === 'tr' ? 'g' : 'd'}`);
+    if (hours > 0) parts.push(`${hours}${lang === 'tr' ? 's' : 'h'}`);
+    if (minutes > 0) parts.push(`${minutes}${lang === 'tr' ? 'dk' : 'm'}`);
+
     return parts.length > 0 ? parts.join(' ') : '< 1m';
   }
 
   const formatNumber = (num: number) => {
+    if (num >= 1000000000) return (num / 1000000000).toFixed(1) + 'B';
     if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
     if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
     return num.toString();
   };
 
+  const tabClasses = (tab: string) =>
+    `flex-1 py-3 text-[11px] sm:text-xs font-semibold uppercase tracking-wider transition-all border-b-2 ${activeTab === tab
+      ? 'border-amber-400 text-amber-400 bg-white/5'
+      : 'border-transparent text-slate-500 hover:text-slate-300'
+    }`;
+
   return (
-    <div className="min-h-screen bg-[#E4E3E0] text-[#141414] font-sans selection:bg-[#141414] selection:text-[#E4E3E0]">
+    <div className="min-h-screen bg-[#0F172A] text-[#E2E8F0] font-sans selection:bg-amber-400 selection:text-slate-900">
+
+      {/* PWA Install Banner */}
+      <AnimatePresence>
+        {showInstallBanner && (
+          <motion.div
+            initial={{ y: -60, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -60, opacity: 0 }}
+            className="bg-gradient-to-r from-amber-600 to-orange-600 text-white px-4 py-3 flex items-center justify-between gap-3 relative z-50"
+          >
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <Download className="w-5 h-5 shrink-0" />
+              <span className="text-xs sm:text-sm font-medium truncate">{t.installPrompt}</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={handleInstall}
+                className="bg-white/20 hover:bg-white/30 px-3 py-1.5 rounded text-xs font-bold uppercase tracking-wider transition-colors"
+              >
+                {t.installApp}
+              </button>
+              <button onClick={() => setShowInstallBanner(false)} className="p-1 hover:bg-white/10 rounded">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Header */}
-      <header className="border-b border-[#141414] p-6 flex justify-between items-center">
+      <header className="border-b border-slate-700/50 px-4 sm:px-6 py-4 flex justify-between items-center bg-slate-900/80 backdrop-blur-sm sticky top-0 z-40">
         <div className="flex items-center gap-3">
-          <div className="bg-[#141414] p-2 rounded-sm">
-            <Calculator className="text-[#E4E3E0] w-6 h-6" />
+          <div className="bg-gradient-to-br from-amber-500 to-orange-600 p-2 rounded-lg shadow-lg shadow-amber-900/30">
+            <Calculator className="text-white w-5 h-5 sm:w-6 sm:h-6" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight uppercase">{t.title}</h1>
-            <p className="text-[10px] font-mono opacity-50 uppercase tracking-widest">{t.subtitle}</p>
+            <h1 className="text-base sm:text-lg font-serif font-bold tracking-wide text-amber-100 leading-none">
+              Age of Empires
+            </h1>
+            <p className="text-[9px] sm:text-[10px] font-mono text-slate-500 uppercase tracking-[0.15em] mt-0.5">
+              {t.subtitle}
+            </p>
           </div>
         </div>
-        <div className="flex gap-4 items-center">
-          <div className="flex border border-[#141414] overflow-hidden">
-            <button 
+        <div className="flex gap-2 items-center">
+          <div className="flex bg-slate-800 rounded-lg overflow-hidden border border-slate-700">
+            <button
               onClick={() => setLang('en')}
-              className={`px-2 py-1 text-[10px] font-mono uppercase ${lang === 'en' ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-white/50'}`}
+              className={`px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors ${lang === 'en' ? 'bg-amber-500 text-slate-900' : 'text-slate-400 hover:text-white'
+                }`}
             >
               EN
             </button>
-            <button 
+            <button
               onClick={() => setLang('tr')}
-              className={`px-2 py-1 text-[10px] font-mono uppercase ${lang === 'tr' ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-white/50'}`}
+              className={`px-2.5 py-1.5 text-[10px] font-mono font-bold uppercase transition-colors ${lang === 'tr' ? 'bg-amber-500 text-slate-900' : 'text-slate-400 hover:text-white'
+                }`}
             >
               TR
             </button>
           </div>
-          <button 
-            onClick={() => alert(t.dataSourceAlert)}
-            className="text-[11px] font-mono uppercase border border-[#141414] px-3 py-1 hover:bg-[#141414] hover:text-[#E4E3E0] transition-colors hidden md:block"
-          >
-            {t.dataSourceInfo}
-          </button>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-0 border-x border-[#141414] min-h-[calc(100vh-89px)]">
-        
+      <main className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-0 min-h-[calc(100vh-61px)]">
+
         {/* Left Sidebar: Controls */}
-        <aside className="lg:col-span-4 border-r border-[#141414] p-8 space-y-10">
-          
+        <aside className="lg:col-span-4 border-r border-slate-700/30 p-6 sm:p-8 space-y-8 bg-slate-900/30">
+
           {/* Unit Type Selection */}
           <section>
-            <label className="text-[11px] font-serif italic opacity-50 uppercase tracking-wider block mb-4">{t.unitClassification}</label>
+            <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-3">
+              {t.unitClassification}
+            </label>
             <div className="grid grid-cols-2 gap-2">
               {(['infantry', 'cavalry', 'archer', 'siege'] as UnitType[]).map((type) => (
                 <button
                   key={type}
                   onClick={() => setState(s => ({ ...s, unitType: type }))}
-                  className={`flex items-center gap-3 p-3 border border-[#141414] transition-all ${
-                    state.unitType === type ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-white/50'
-                  }`}
+                  className={`flex items-center gap-2.5 p-2.5 rounded-lg border transition-all ${state.unitType === type
+                      ? 'bg-amber-500/15 border-amber-500/50 text-amber-300'
+                      : 'border-slate-700/50 text-slate-400 hover:border-slate-500 hover:text-slate-200'
+                    }`}
                 >
                   {UNIT_ICONS[type]}
-                  <span className="text-xs font-bold uppercase tracking-tight">{t[type]}</span>
+                  <span className="text-xs font-semibold uppercase tracking-tight">{t[type]}</span>
                 </button>
               ))}
             </div>
           </section>
 
           {/* Tier Selection */}
-          <section>
-            <label className="text-[11px] font-serif italic opacity-50 uppercase tracking-wider block mb-4">{t.targetTierLevel}</label>
-            <div className="grid grid-cols-4 gap-2">
-              {[1, 2, 3, 4, 5, 6, 7, 8].map((tVal) => (
-                <button
-                  key={tVal}
-                  onClick={() => setState(s => ({ ...s, targetTier: tVal }))}
-                  className={`relative h-12 border border-[#141414] flex items-center justify-center transition-all ${
-                    state.targetTier === tVal ? 'bg-[#141414] text-[#E4E3E0]' : 'hover:bg-white/50'
-                  }`}
-                >
-                  <span className="text-sm font-bold">T{tVal}</span>
-                  {state.targetTier === tVal && (
-                    <motion.div 
-                      layoutId="tier-indicator"
-                      className={`absolute bottom-0 left-0 right-0 h-1 ${TIER_COLORS[tVal]}`} 
-                    />
-                  )}
-                </button>
-              ))}
+          <section className="space-y-5">
+            <div>
+              <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-3">
+                {t.currentTier}
+              </label>
+              <div className="grid grid-cols-5 gap-1.5">
+                {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((tVal) => (
+                  <button
+                    key={tVal}
+                    disabled={tVal >= state.targetTier}
+                    onClick={() => setState(s => ({ ...s, currentTier: tVal }))}
+                    className={`h-8 rounded border text-[10px] font-bold transition-all ${state.currentTier === tVal
+                        ? 'bg-amber-500 text-slate-900 border-amber-400'
+                        : tVal >= state.targetTier
+                          ? 'opacity-20 cursor-not-allowed border-slate-700 text-slate-600'
+                          : 'border-slate-700 text-slate-400 hover:border-slate-500 hover:text-white'
+                      }`}
+                  >
+                    {tVal === 0 ? t.newUnit : `T${tVal}`}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-3">
+                {t.targetTierLevel}
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9].map((tVal) => (
+                  <button
+                    key={tVal}
+                    onClick={() => setState(s => {
+                      const newState = { ...s, targetTier: tVal };
+                      if (s.currentTier >= tVal) newState.currentTier = Math.max(0, tVal - 1);
+                      return newState;
+                    })}
+                    className={`relative h-10 rounded-lg border font-bold text-sm transition-all ${state.targetTier === tVal
+                        ? 'bg-slate-700 text-white border-slate-500'
+                        : 'border-slate-700/50 text-slate-500 hover:border-slate-500 hover:text-white'
+                      }`}
+                  >
+                    T{tVal}
+                    {state.targetTier === tVal && (
+                      <motion.div
+                        layoutId="tier-indicator"
+                        className={`absolute bottom-0 left-1 right-1 h-0.5 rounded-full ${TIER_COLORS[tVal]}`}
+                      />
+                    )}
+                  </button>
+                ))}
+              </div>
             </div>
           </section>
 
           {/* Amount & Buffs */}
-          <section className="space-y-6">
+          <section className="space-y-5">
             <div>
               <div className="flex justify-between items-center mb-2">
-                <label className="text-[11px] font-serif italic opacity-50 uppercase tracking-wider">{t.trainingQuantity}</label>
-                <span className="text-xs font-mono font-bold">{state.amount.toLocaleString()}</span>
+                <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  {t.trainingQuantity}
+                </label>
+                <span className="text-xs font-mono font-bold text-amber-300">{state.amount.toLocaleString()}</span>
               </div>
-              <input 
-                type="range" 
-                min="100" 
-                max="100000" 
+              <input
+                type="range"
+                min="100"
+                max="100000"
                 step="100"
                 value={state.amount}
                 onChange={(e) => setState(s => ({ ...s, amount: parseInt(e.target.value) }))}
-                className="w-full accent-[#141414] cursor-pointer"
+                className="w-full accent-amber-500 cursor-pointer"
               />
               <div className="flex gap-2 mt-2">
                 {[1000, 5000, 10000, 20000].map(val => (
-                  <button 
+                  <button
                     key={val}
                     onClick={() => setState(s => ({ ...s, amount: val }))}
-                    className="flex-1 text-[10px] font-mono border border-[#141414] py-1 hover:bg-[#141414] hover:text-[#E4E3E0]"
+                    className={`flex-1 text-[10px] font-mono py-1.5 rounded border transition-all ${state.amount === val
+                        ? 'bg-amber-500/20 border-amber-500/50 text-amber-300'
+                        : 'border-slate-700 text-slate-500 hover:text-white hover:border-slate-500'
+                      }`}
                   >
                     {formatNumber(val)}
                   </button>
@@ -213,24 +390,38 @@ export default function App() {
               </div>
             </div>
 
-            <div>
-              <div className="flex justify-between items-center mb-2">
-                <label className="text-[11px] font-serif italic opacity-50 uppercase tracking-wider">{t.trainingSpeedBuff}</label>
-                <span className="text-xs font-mono font-bold">+{state.trainingBuff}%</span>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                  {t.trainingSpeedBuff}
+                </label>
+                <input
+                  type="number"
+                  value={state.trainingBuff}
+                  onChange={(e) => setState(s => ({ ...s, trainingBuff: Math.max(0, parseInt(e.target.value) || 0) }))}
+                  className="w-full bg-slate-800/60 border border-slate-700 rounded-lg p-2 text-sm font-mono text-white focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30"
+                  placeholder="0"
+                />
               </div>
-              <input 
-                type="number" 
-                value={state.trainingBuff}
-                onChange={(e) => setState(s => ({ ...s, trainingBuff: Math.max(0, parseInt(e.target.value) || 0) }))}
-                className="w-full bg-transparent border border-[#141414] p-2 text-sm font-mono focus:outline-none focus:bg-white/50"
-              />
+              <div>
+                <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                  {t.researchBuff}
+                </label>
+                <input
+                  type="number"
+                  value={state.researchBuff}
+                  onChange={(e) => setState(s => ({ ...s, researchBuff: Math.max(0, parseInt(e.target.value) || 0) }))}
+                  className="w-full bg-slate-800/60 border border-slate-700 rounded-lg p-2 text-sm font-mono text-white focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500/30"
+                  placeholder="0"
+                />
+              </div>
             </div>
           </section>
 
-          <div className="pt-6 border-t border-[#141414]/20">
-            <div className="bg-white/30 p-4 border border-[#141414] flex items-start gap-3">
-              <Info className="w-4 h-4 mt-0.5 opacity-50 shrink-0" />
-              <p className="text-[10px] leading-relaxed opacity-70">
+          <div className="pt-4 border-t border-slate-700/30">
+            <div className="bg-slate-800/50 p-3 rounded-lg border border-slate-700/30 flex items-start gap-2.5">
+              <Info className="w-4 h-4 mt-0.5 text-slate-500 shrink-0" />
+              <p className="text-[11px] leading-relaxed text-slate-400">
                 {t.sidebarInfo}
               </p>
             </div>
@@ -238,37 +429,25 @@ export default function App() {
         </aside>
 
         {/* Main Content: Results */}
-        <div className="lg:col-span-8 bg-white/40">
-          
+        <div className="lg:col-span-8">
+
           {/* Tabs */}
-          <div className="flex border-b border-[#141414]">
-            <button 
-              onClick={() => setActiveTab('training')}
-              className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest transition-all ${
-                activeTab === 'training' ? 'bg-white border-b-2 border-b-[#141414]' : 'opacity-40 hover:opacity-100'
-              }`}
-            >
+          <div className="flex border-b border-slate-700/30">
+            <button onClick={() => setActiveTab('training')} className={tabClasses('training')}>
               {t.trainingTab}
             </button>
-            <button 
-              onClick={() => setActiveTab('research')}
-              className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest transition-all ${
-                activeTab === 'research' ? 'bg-white border-b-2 border-b-[#141414]' : 'opacity-40 hover:opacity-100'
-              }`}
-            >
+            <button onClick={() => setActiveTab('research')} className={tabClasses('research')}>
               {t.researchTab}
             </button>
-            <button 
-              onClick={() => setActiveTab('data')}
-              className={`flex-1 py-4 text-xs font-bold uppercase tracking-widest transition-all ${
-                activeTab === 'data' ? 'bg-white border-b-2 border-b-[#141414]' : 'opacity-40 hover:opacity-100'
-              }`}
-            >
+            <button onClick={() => setActiveTab('buildings')} className={tabClasses('buildings')}>
+              {t.buildingsTab}
+            </button>
+            <button onClick={() => setActiveTab('data')} className={tabClasses('data')}>
               {t.dataTableTab}
             </button>
           </div>
 
-          <div className="p-10">
+          <div className="p-6 sm:p-8">
             <AnimatePresence mode="wait">
               {activeTab === 'training' ? (
                 <motion.div
@@ -276,32 +455,32 @@ export default function App() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="space-y-12"
+                  className="space-y-8"
                 >
                   {/* Summary Cards */}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    <div className="border border-[#141414] p-8 bg-white shadow-[8px_8px_0px_0px_rgba(20,20,20,1)]">
-                      <div className="flex items-center gap-2 mb-6 opacity-50">
-                        <Clock className="w-4 h-4" />
-                        <span className="text-[10px] font-mono uppercase tracking-widest">{t.totalTimeRequired}</span>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="rounded-xl border border-slate-700/50 p-6 bg-gradient-to-br from-slate-800/80 to-slate-900/80">
+                      <div className="flex items-center gap-2 mb-4">
+                        <Clock className="w-4 h-4 text-sky-400" />
+                        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">{t.totalTimeRequired}</span>
                       </div>
-                      <div className="text-4xl font-bold tracking-tighter">
+                      <div className="text-3xl sm:text-4xl font-bold tracking-tight text-white">
                         {calculations?.formattedTime}
                       </div>
-                      <div className="mt-4 text-[10px] font-mono opacity-50 uppercase">
+                      <div className="mt-3 text-[11px] font-mono text-slate-500">
                         {calculations?.totalTimeSeconds.toLocaleString()} {t.totalSeconds}
                       </div>
                     </div>
 
-                    <div className="border border-[#141414] p-8 bg-white shadow-[8px_8px_0px_0px_rgba(20,20,20,1)]">
-                      <div className="flex items-center gap-2 mb-6 opacity-50">
-                        <TrendingUp className="w-4 h-4" />
-                        <span className="text-[10px] font-mono uppercase tracking-widest">{t.unitStrength}</span>
+                    <div className="rounded-xl border border-slate-700/50 p-6 bg-gradient-to-br from-slate-800/80 to-slate-900/80">
+                      <div className="flex items-center gap-2 mb-4">
+                        <TrendingUp className="w-4 h-4 text-emerald-400" />
+                        <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">{t.unitStrength}</span>
                       </div>
-                      <div className="text-4xl font-bold tracking-tighter">
-                        {state.targetTier * 1250} <span className="text-lg opacity-30">{t.power}</span>
+                      <div className="text-3xl sm:text-4xl font-bold tracking-tight text-white">
+                        {state.targetTier * 1250} <span className="text-lg text-slate-500">{t.power}</span>
                       </div>
-                      <div className="mt-4 text-[10px] font-mono opacity-50 uppercase">
+                      <div className="mt-3 text-[11px] font-mono text-slate-500">
                         {t.estimatedPowerGain}
                       </div>
                     </div>
@@ -309,19 +488,18 @@ export default function App() {
 
                   {/* Resource Grid */}
                   <section>
-                    <h3 className="text-[11px] font-serif italic opacity-50 uppercase tracking-wider mb-6">{t.resourceBreakdown}</h3>
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-4">
+                      {calculations?.isUpgrade ? t.upgradeCost : t.resourceBreakdown}
+                    </h3>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                       {(Object.entries(calculations?.totalCost || {}) as [string, number][]).map(([res, amount]) => (
-                        <div key={res} className="border border-[#141414] p-6 bg-white/50 group hover:bg-[#141414] hover:text-[#E4E3E0] transition-all">
-                          <div className="text-[10px] font-mono uppercase opacity-50 group-hover:opacity-100 mb-2">{t[res as keyof typeof t] || res}</div>
-                          <div className="text-2xl font-bold tracking-tight">{formatNumber(amount)}</div>
-                          <div className="mt-2 h-1 bg-[#141414]/10 group-hover:bg-[#E4E3E0]/20">
-                            <motion.div 
-                              initial={{ width: 0 }}
-                              animate={{ width: '100%' }}
-                              className={`h-full ${res === 'gold' ? 'bg-amber-400' : 'bg-[#141414] group-hover:bg-[#E4E3E0]'}`} 
-                            />
+                        <div key={res} className="rounded-lg border border-slate-700/50 p-4 bg-slate-800/40 hover:bg-slate-800/70 transition-all group">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className={`text-[11px] font-semibold uppercase ${RES_COLORS[res]}`}>
+                              {t[res as keyof typeof t] || res}
+                            </span>
                           </div>
+                          <div className="text-xl sm:text-2xl font-bold text-white tracking-tight">{formatNumber(amount)}</div>
                         </div>
                       ))}
                     </div>
@@ -329,23 +507,23 @@ export default function App() {
 
                   {/* Comparison Table */}
                   <section>
-                    <h3 className="text-[11px] font-serif italic opacity-50 uppercase tracking-wider mb-6">{t.tierEfficiencyComparison}</h3>
-                    <div className="border border-[#141414] overflow-hidden">
-                      <div className="grid grid-cols-4 bg-[#141414] text-[#E4E3E0] p-3 text-[10px] font-mono uppercase tracking-widest">
+                    <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-4">{t.tierEfficiencyComparison}</h3>
+                    <div className="rounded-xl border border-slate-700/50 overflow-hidden">
+                      <div className="grid grid-cols-4 bg-slate-800 p-3 text-[10px] font-mono text-slate-400 uppercase tracking-wider">
                         <span>{t.tier}</span>
                         <span>{t.costPerUnit}</span>
                         <span>{t.timePerUnit}</span>
                         <span>{t.powerPerRes}</span>
                       </div>
                       {unitData.slice(Math.max(0, state.targetTier - 3), state.targetTier + 1).map((u) => (
-                        <div key={u.tier} className={`grid grid-cols-4 p-4 border-t border-[#141414] text-xs font-mono items-center ${u.tier === state.targetTier ? 'bg-white font-bold' : 'opacity-60'}`}>
+                        <div key={u.tier} className={`grid grid-cols-4 p-3.5 border-t border-slate-700/30 text-xs font-mono items-center ${u.tier === state.targetTier ? 'bg-amber-500/10 text-amber-200 font-bold' : 'text-slate-400'}`}>
                           <div className="flex items-center gap-2">
                             <div className={`w-2 h-2 rounded-full ${TIER_COLORS[u.tier]}`} />
                             T{u.tier}
                           </div>
                           <div>{formatNumber((Object.values(u.trainingCost) as number[]).reduce((a, b) => a + b, 0))}</div>
-                          <div>{u.trainingTimeSeconds}s</div>
-                          <div className="text-emerald-600">{(u.tier / ((Object.values(u.trainingCost) as number[]).reduce((a, b) => a + b, 0) / 1000)).toFixed(2)}</div>
+                          <div>{formatTime(u.trainingTimeSeconds)}</div>
+                          <div className="text-emerald-400">{(u.tier / ((Object.values(u.trainingCost) as number[]).reduce((a, b) => a + b, 0) / 1000)).toFixed(2)}</div>
                         </div>
                       ))}
                     </div>
@@ -357,46 +535,211 @@ export default function App() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="space-y-8"
+                  className="space-y-6"
                 >
-                  <div className="bg-[#141414] text-[#E4E3E0] p-8 rounded-sm">
-                    <h2 className="text-2xl font-bold mb-2">{t.researchPath.replace('{tier}', state.targetTier.toString())}</h2>
-                    <p className="text-xs opacity-60 font-mono uppercase tracking-widest">{t.militaryRequirements.replace('{unitType}', t[state.unitType])}</p>
+                  <div className="bg-gradient-to-r from-violet-600/20 to-sky-600/20 border border-violet-500/30 rounded-xl p-6">
+                    <h2 className="text-xl font-serif font-bold text-white mb-1">{t.researchPath.replace('{tier}', state.targetTier.toString())}</h2>
+                    <p className="text-xs text-slate-400 font-mono uppercase tracking-wider">{t.militaryRequirements.replace('{unitType}', t[state.unitType])}</p>
                   </div>
 
-                  <div className="space-y-4">
+                  <div className="space-y-3">
                     {[
-                      { name: 'Advanced Metallurgy', level: state.targetTier * 2, status: 'required' },
-                      { name: `${t[state.unitType]} Mastery`, level: state.targetTier + 5, status: 'required' },
-                      { name: 'Tactical Formations', level: 10, status: 'recommended' },
-                      { name: 'Elite Training Grounds', level: state.targetTier, status: 'required' },
+                      { name: lang === 'tr' ? 'Gelişmiş Metalürji' : 'Advanced Metallurgy', level: state.targetTier * 2, status: 'required' },
+                      { name: `${t[state.unitType]} ${lang === 'tr' ? 'Ustalığı' : 'Mastery'}`, level: state.targetTier + 5, status: 'required' },
+                      { name: lang === 'tr' ? 'Taktik Formasyonları' : 'Tactical Formations', level: 10, status: 'recommended' },
+                      { name: lang === 'tr' ? 'Elit Eğitim Alanı' : 'Elite Training Grounds', level: state.targetTier, status: 'required' },
                     ].map((req, i) => (
-                      <div key={i} className="flex items-center justify-between p-6 border border-[#141414] bg-white group hover:translate-x-2 transition-transform">
-                        <div className="flex items-center gap-4">
-                          <div className="w-10 h-10 border border-[#141414] flex items-center justify-center font-bold">
+                      <div key={i} className="flex items-center justify-between p-4 rounded-lg border border-slate-700/50 bg-slate-800/30 hover:bg-slate-800/60 transition-all">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-lg bg-slate-700/50 flex items-center justify-center text-xs font-bold text-amber-400">
                             {i + 1}
                           </div>
                           <div>
-                            <div className="text-sm font-bold uppercase">{req.name}</div>
-                            <div className="text-[10px] font-mono opacity-50 uppercase">{t.requiredLevel}: {req.level}</div>
+                            <div className="text-sm font-semibold text-white">{req.name}</div>
+                            <div className="text-[10px] font-mono text-slate-500">{t.requiredLevel}: {req.level}</div>
                           </div>
                         </div>
-                        <div className={`text-[10px] font-mono px-3 py-1 border border-[#141414] uppercase ${req.status === 'required' ? 'bg-red-100' : 'bg-blue-100'}`}>
+                        <div className={`text-[10px] font-mono px-2.5 py-1 rounded-full font-semibold uppercase ${req.status === 'required' ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'bg-sky-500/20 text-sky-300 border border-sky-500/30'}`}>
                           {t[req.status as keyof typeof t] || req.status}
                         </div>
                       </div>
                     ))}
                   </div>
 
-                  <div className="p-8 border-2 border-dashed border-[#141414] text-center space-y-4">
-                    <RefreshCw className="w-8 h-8 mx-auto opacity-20" />
-                    <p className="text-xs font-serif italic opacity-60">
-                      {t.researchWarning.replace('{level}', state.targetTier === 8 ? '25' : '23')}
-                    </p>
-                    <button className="bg-[#141414] text-[#E4E3E0] px-6 py-2 text-[11px] font-mono uppercase tracking-widest hover:opacity-90">
-                      {t.calculateResearchCost}
-                    </button>
+                  <div className="rounded-xl border border-slate-700/50 p-6 bg-slate-800/30 space-y-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <Clock className="w-4 h-4 text-violet-400" />
+                      <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">{t.baseResearchTime}</span>
+                    </div>
+                    <div className="text-3xl font-bold text-white">{calculations?.formattedResearchTime}</div>
+
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-4 border-t border-slate-700/30">
+                      {(Object.entries(calculations?.researchCost || {}) as [string, number][]).map(([res, amount]) => (
+                        <div key={res} className="rounded-lg border border-slate-700/30 p-3 bg-slate-900/50">
+                          <div className={`text-[10px] font-semibold uppercase mb-1 ${RES_COLORS[res]}`}>{t[res as keyof typeof t] || res}</div>
+                          <div className="text-base font-bold text-white">{formatNumber(amount)}</div>
+                        </div>
+                      ))}
+                    </div>
                   </div>
+
+                  <div className="rounded-xl border border-amber-500/20 bg-amber-500/5 p-4 text-center">
+                    <p className="text-xs text-amber-200/80">
+                      {t.researchWarning.replace('{level}', state.targetTier === 9 ? '35' : (state.targetTier === 8 ? '25' : '23'))}
+                    </p>
+                    <div className="mt-3 bg-slate-800/50 rounded-lg p-3 text-[11px] font-mono text-sky-300">
+                      {t.totalUnlockCost
+                        .replace('{tier}', state.targetTier.toString())
+                        .replace('{amount}', formatNumber(unitData.slice(0, state.targetTier).reduce((acc, u) => acc + (u.researchCost ? (Object.values(u.researchCost) as number[]).reduce((a, b) => a + b, 0) : 0), 0)))}
+                    </div>
+                  </div>
+                </motion.div>
+              ) : activeTab === 'buildings' ? (
+                <motion.div
+                  key="buildings"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="space-y-6"
+                >
+                  {/* Building selection */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-3">
+                      {t.selectBuilding}
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {BUILDINGS.map(b => (
+                        <button
+                          key={b.id}
+                          onClick={() => {
+                            setSelectedBuilding(b.id);
+                            setBuildingToLevel(Math.min(buildingToLevel, b.levels[b.levels.length - 1].level));
+                          }}
+                          className={`flex items-center gap-2 p-3 rounded-lg border text-left transition-all ${selectedBuilding === b.id
+                              ? 'bg-amber-500/15 border-amber-500/50 text-amber-200'
+                              : 'border-slate-700/50 text-slate-400 hover:border-slate-500 hover:text-white'
+                            }`}
+                        >
+                          <span className="text-lg">{b.icon}</span>
+                          <div>
+                            <div className="text-xs font-semibold">{lang === 'tr' ? b.nameTR : b.nameEN}</div>
+                            <div className={`text-[9px] font-mono uppercase ${b.category === 'military' ? 'text-red-400' : b.category === 'economy' ? 'text-emerald-400' : 'text-sky-400'
+                              }`}>
+                              {t[b.category as keyof typeof t]}
+                            </div>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Level range */}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                        {t.currentLevel}
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        max={buildingToLevel - 1}
+                        value={buildingFromLevel}
+                        onChange={(e) => setBuildingFromLevel(Math.max(0, parseInt(e.target.value) || 0))}
+                        className="w-full bg-slate-800/60 border border-slate-700 rounded-lg p-2.5 text-sm font-mono text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                        {t.targetLevel}
+                      </label>
+                      <input
+                        type="number"
+                        min={buildingFromLevel + 1}
+                        max={25}
+                        value={buildingToLevel}
+                        onChange={(e) => setBuildingToLevel(Math.max(buildingFromLevel + 1, parseInt(e.target.value) || buildingFromLevel + 1))}
+                        className="w-full bg-slate-800/60 border border-slate-700 rounded-lg p-2.5 text-sm font-mono text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Building buff */}
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-2">
+                      {t.buildingSpeedBuff}
+                    </label>
+                    <input
+                      type="number"
+                      value={buildingBuff}
+                      onChange={(e) => setBuildingBuff(Math.max(0, parseInt(e.target.value) || 0))}
+                      className="w-full max-w-[200px] bg-slate-800/60 border border-slate-700 rounded-lg p-2.5 text-sm font-mono text-white focus:outline-none focus:border-amber-500"
+                      placeholder="0"
+                    />
+                  </div>
+
+                  {/* Results */}
+                  {buildingCalc && (
+                    <>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div className="rounded-xl border border-slate-700/50 p-5 bg-gradient-to-br from-slate-800/80 to-slate-900/80">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Clock className="w-4 h-4 text-sky-400" />
+                            <span className="text-[10px] font-semibold text-slate-400 uppercase">{t.upgradeTime}</span>
+                          </div>
+                          <div className="text-2xl font-bold text-white">{buildingCalc.formattedTime}</div>
+                        </div>
+                        <div className="rounded-xl border border-slate-700/50 p-5 bg-gradient-to-br from-slate-800/80 to-slate-900/80">
+                          <div className="flex items-center gap-2 mb-3">
+                            <TrendingUp className="w-4 h-4 text-emerald-400" />
+                            <span className="text-[10px] font-semibold text-slate-400 uppercase">{t.powerGain}</span>
+                          </div>
+                          <div className="text-2xl font-bold text-white">{formatNumber(buildingCalc.totalPower)} <span className="text-sm text-slate-500">{t.power}</span></div>
+                        </div>
+                        <div className="rounded-xl border border-slate-700/50 p-5 bg-gradient-to-br from-slate-800/80 to-slate-900/80">
+                          <div className="flex items-center gap-2 mb-3">
+                            <Building2 className="w-4 h-4 text-amber-400" />
+                            <span className="text-[10px] font-semibold text-slate-400 uppercase">{t.totalForRange}</span>
+                          </div>
+                          <div className="text-2xl font-bold text-amber-300">
+                            {t.levelRange.replace('{from}', buildingFromLevel.toString()).replace('{to}', buildingToLevel.toString())}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        {(Object.entries(buildingCalc.totalCost) as [string, number][]).map(([res, amount]) => (
+                          <div key={res} className="rounded-lg border border-slate-700/50 p-4 bg-slate-800/40">
+                            <div className={`text-[11px] font-semibold uppercase mb-1 ${RES_COLORS[res]}`}>{t[res as keyof typeof t] || res}</div>
+                            <div className="text-xl font-bold text-white">{formatNumber(amount)}</div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Per-level breakdown */}
+                      <div className="rounded-xl border border-slate-700/50 overflow-hidden">
+                        <div className="grid grid-cols-6 bg-slate-800 p-3 text-[10px] font-mono text-slate-400 uppercase tracking-wider">
+                          <span>Lv.</span>
+                          <span>{t.food}</span>
+                          <span>{t.wood}</span>
+                          <span>{t.stone}</span>
+                          <span>{t.gold}</span>
+                          <span>{t.timeSeconds}</span>
+                        </div>
+                        <div className="max-h-[300px] overflow-y-auto">
+                          {buildingCalc.levels.map((l) => (
+                            <div key={l.level} className="grid grid-cols-6 p-3 border-t border-slate-700/20 text-xs font-mono text-slate-300 hover:bg-slate-800/40">
+                              <div className="font-bold text-amber-300">{l.level}</div>
+                              <div>{formatNumber(l.upgradeCost.food)}</div>
+                              <div>{formatNumber(l.upgradeCost.wood)}</div>
+                              <div>{formatNumber(l.upgradeCost.stone)}</div>
+                              <div>{formatNumber(l.upgradeCost.gold)}</div>
+                              <div>{formatTime(l.upgradeTimeSeconds)}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
                 </motion.div>
               ) : (
                 <motion.div
@@ -404,31 +747,31 @@ export default function App() {
                   initial={{ opacity: 0, y: 10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="space-y-6"
+                  className="space-y-4"
                 >
-                  <div className="bg-amber-50 border border-amber-200 p-4 text-[10px] font-mono uppercase tracking-tight text-amber-800">
+                  <div className="bg-amber-500/10 border border-amber-500/30 p-3 rounded-lg text-[11px] font-mono text-amber-200">
                     {t.dataWarning}
                   </div>
-                  <div className="border border-[#141414] overflow-x-auto">
+                  <div className="rounded-xl border border-slate-700/50 overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                       <thead>
-                        <tr className="bg-[#141414] text-[#E4E3E0] text-[10px] font-mono uppercase">
-                          <th className="p-3 border-r border-[#E4E3E0]/20">{t.tier}</th>
-                          <th className="p-3 border-r border-[#E4E3E0]/20">{t.food}</th>
-                          <th className="p-3 border-r border-[#E4E3E0]/20">{t.wood}</th>
-                          <th className="p-3 border-r border-[#E4E3E0]/20">{t.stone}</th>
-                          <th className="p-3 border-r border-[#E4E3E0]/20">{t.gold}</th>
+                        <tr className="bg-slate-800 text-[10px] font-mono text-slate-400 uppercase">
+                          <th className="p-3 border-r border-slate-700/30">{t.tier}</th>
+                          <th className="p-3 border-r border-slate-700/30">{t.food}</th>
+                          <th className="p-3 border-r border-slate-700/30">{t.wood}</th>
+                          <th className="p-3 border-r border-slate-700/30">{t.stone}</th>
+                          <th className="p-3 border-r border-slate-700/30">{t.gold}</th>
                           <th className="p-3">{t.timeSeconds}</th>
                         </tr>
                       </thead>
                       <tbody className="text-xs font-mono">
                         {unitData.map((u) => (
-                          <tr key={u.tier} className="border-t border-[#141414] hover:bg-white/50">
-                            <td className="p-3 border-r border-[#141414]/10 font-bold">T{u.tier}</td>
-                            <td className="p-3 border-r border-[#141414]/10">{u.trainingCost.food.toLocaleString()}</td>
-                            <td className="p-3 border-r border-[#141414]/10">{u.trainingCost.wood.toLocaleString()}</td>
-                            <td className="p-3 border-r border-[#141414]/10">{u.trainingCost.stone.toLocaleString()}</td>
-                            <td className="p-3 border-r border-[#141414]/10">{u.trainingCost.gold.toLocaleString()}</td>
+                          <tr key={u.tier} className="border-t border-slate-700/20 text-slate-300 hover:bg-slate-800/40">
+                            <td className="p-3 border-r border-slate-700/10 font-bold text-amber-300">T{u.tier}</td>
+                            <td className="p-3 border-r border-slate-700/10">{u.trainingCost.food.toLocaleString()}</td>
+                            <td className="p-3 border-r border-slate-700/10">{u.trainingCost.wood.toLocaleString()}</td>
+                            <td className="p-3 border-r border-slate-700/10">{u.trainingCost.stone.toLocaleString()}</td>
+                            <td className="p-3 border-r border-slate-700/10">{u.trainingCost.gold.toLocaleString()}</td>
                             <td className="p-3">{u.trainingTimeSeconds.toLocaleString()}</td>
                           </tr>
                         ))}
@@ -443,15 +786,15 @@ export default function App() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-[#141414] p-8 bg-white">
-        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-6">
-          <div className="text-[10px] font-mono opacity-50 uppercase tracking-widest">
+      <footer className="border-t border-slate-700/30 p-6 bg-slate-900/80">
+        <div className="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
+          <div className="text-[10px] font-mono text-slate-600 uppercase tracking-wider text-center md:text-left">
             © 2026 AoE Mobile Fan Project • Not affiliated with World's Edge or Xbox Game Studios
           </div>
-          <div className="flex gap-8">
-            <a href="#" className="text-[10px] font-mono uppercase hover:underline">{t.discord}</a>
-            <a href="#" className="text-[10px] font-mono uppercase hover:underline">{t.bugReport}</a>
-            <a href="#" className="text-[10px] font-mono uppercase hover:underline">{t.contribute}</a>
+          <div className="flex gap-6">
+            <a href="#" className="text-[10px] font-mono text-slate-500 uppercase hover:text-amber-400 transition-colors">{t.discord}</a>
+            <a href="#" className="text-[10px] font-mono text-slate-500 uppercase hover:text-amber-400 transition-colors">{t.bugReport}</a>
+            <a href="#" className="text-[10px] font-mono text-slate-500 uppercase hover:text-amber-400 transition-colors">{t.contribute}</a>
           </div>
         </div>
       </footer>
